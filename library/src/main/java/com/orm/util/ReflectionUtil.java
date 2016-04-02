@@ -5,10 +5,8 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.util.Log;
-
 import com.orm.SugarRecord;
-import com.orm.dsl.Ignore;
-import com.orm.dsl.Table;
+import com.orm.dsl.*;
 
 import java.io.File;
 import java.io.IOException;
@@ -18,13 +16,7 @@ import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.net.URL;
 import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Collections;
-import java.util.Date;
-import java.util.Enumeration;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class ReflectionUtil {
 
@@ -46,6 +38,80 @@ public class ReflectionUtil {
 
         SugarConfig.setFields(table, toStore);
         return toStore;
+    }
+
+    public static List<SugarValidator> getValidators(Class table) {
+        List<SugarValidator> validatorList = SugarConfig.getValidators(table);
+        if(validatorList != null) return validatorList;
+
+        Log.d("Sugar", "Fetching validators");
+        validatorList = new ArrayList<>();
+
+        getAllValidators(validatorList, table);
+
+        SugarConfig.setValidators(table, validatorList);
+        return validatorList;
+    }
+
+    private static List<SugarValidator> getAllValidators(List<SugarValidator> validators, Class<?> type) {
+        EntityListener entityListener = type.getAnnotation(EntityListener.class);
+        if(entityListener == null)
+            return validators;
+
+        List<Class<?>> validatorClasses = Arrays.asList(entityListener.clazz());
+        for (Class<?> validatorClass : validatorClasses) {
+            SugarValidator sugarValidator = new SugarValidator();
+
+            try {
+                final Object validator = validatorClass.newInstance();
+
+                sugarValidator.setParentObject(validator);
+
+                for(Method validatorMethod : validatorClass.getMethods()) {
+
+                    if(validatorMethod.isAnnotationPresent(PrePersist.class)) {
+                        sugarValidator.addPrePersistValidator(validatorMethod);
+                    }
+
+                    if(validatorMethod.isAnnotationPresent(PostPersist.class)) {
+                        sugarValidator.addPostPersistValidator(validatorMethod);
+                    }
+
+                    if(validatorMethod.isAnnotationPresent(PreUpdate.class)) {
+                        sugarValidator.addPreUpdateValidator(validatorMethod);
+                    }
+
+                    if(validatorMethod.isAnnotationPresent(PostUpdate.class)) {
+                        sugarValidator.addPostUpdateValidator(validatorMethod);
+                    }
+
+                    if(validatorMethod.isAnnotationPresent(PreRemove.class)) {
+                        sugarValidator.addPreRemoveValidator(validatorMethod);
+                    }
+
+                    if(validatorMethod.isAnnotationPresent(PostRemove.class)) {
+                        sugarValidator.addPostLoadValidator(validatorMethod);
+                    }
+
+                    if(validatorMethod.isAnnotationPresent(PostLoad.class)) {
+                        sugarValidator.addPostLoadValidator(validatorMethod);
+                    }
+                }
+
+                validators.add(sugarValidator);
+
+            } catch (InstantiationException e) {
+                Log.e("Sugar", "Could not instantiate validator with class name '"+ validatorClass.getName() +"'. Please check if the class is instantiable");
+            } catch (IllegalAccessException e) {
+                Log.e("Sugar", "Could not access the constructor of validator class name '"+ validatorClass.getName() +"'. Please check if the constructor is accessible");
+            }
+        }
+
+        if(type.getSuperclass() != null) {
+            validators = getAllValidators(validators, type);
+        }
+
+        return validators;
     }
 
     private static List<Field> getAllFields(List<Field> fields, Class<?> type) {

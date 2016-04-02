@@ -10,10 +10,7 @@ import android.util.Log;
 
 import com.orm.dsl.Table;
 import com.orm.dsl.Unique;
-import com.orm.util.NamingHelper;
-import com.orm.util.QueryBuilder;
-import com.orm.util.ReflectionUtil;
-import com.orm.util.SugarCursor;
+import com.orm.util.*;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -126,7 +123,7 @@ public class SugarRecord {
     public static <T> List<T> listAll(Class<T> type) {
         return find(type, null, null, null, null, null);
     }
-    
+
     public static <T> List<T> listAll(Class<T> type, String orderBy) {
         return find(type, null, null, null, orderBy, null);
     }
@@ -261,6 +258,13 @@ public class SugarRecord {
     }
 
     static long save(SQLiteDatabase db, Object object) {
+        List<SugarValidator> validators = ReflectionUtil.getValidators(object.getClass());
+
+        for (SugarValidator validator : validators) {
+            if(!validator.validatePrePersist(object))
+                return -1;
+        }
+
         Map<Object, Long> entitiesMap = getSugarContext().getEntitiesMap();
         List<Field> columns = ReflectionUtil.getTableFields(object.getClass());
         ContentValues values = new ContentValues(columns.size());
@@ -297,6 +301,10 @@ public class SugarRecord {
 
         Log.i(SUGAR, object.getClass().getSimpleName() + " saved : " + id);
 
+        for(SugarValidator validator : validators) {
+            validator.validatePostPersist(object);
+        }
+
         return id;
     }
 
@@ -305,6 +313,14 @@ public class SugarRecord {
     }
 
     static long update(SQLiteDatabase db, Object object) {
+        List<SugarValidator> validators = ReflectionUtil.getValidators(object.getClass());
+
+        for(SugarValidator validator : validators) {
+            if(!validator.validatePreUpdate(object)) {
+                return -1;
+            }
+        }
+
         Map<Object, Long> entitiesMap = getSugarContext().getEntitiesMap();
         List<Field> columns = ReflectionUtil.getTableFields(object.getClass());
         ContentValues values = new ContentValues(columns.size());
@@ -338,6 +354,9 @@ public class SugarRecord {
         if (rowsEffected == 0) {
             return save(db, object);
         } else {
+            for (SugarValidator validator : validators) {
+                validator.validatePostUpdate(object);
+            }
             return rowsEffected;
         }
     }
@@ -368,48 +387,81 @@ public class SugarRecord {
                 ReflectionUtil.setFieldValueFromCursor(cursor, field, object);
             }
         }
+
+        List<SugarValidator> validators = ReflectionUtil.getValidators(object.getClass());
+
+        for (SugarValidator validator : validators) {
+            validator.validatePostLoad(object);
+        }
     }
 
     public boolean delete() {
         Long id = getId();
         Class<?> type = getClass();
+        boolean deleted = false;
+
+        List<SugarValidator> validators = ReflectionUtil.getValidators(this.getClass());
+        for (SugarValidator validator : validators) {
+            if(!validator.validatePreRemove(this))
+                return false;
+        }
+
         if (id != null && id > 0L) {
             Log.i(SUGAR, type.getSimpleName() + " deleted : " + id);
-            return getSugarDataBase().delete(NamingHelper.toSQLName(type), "Id=?", new String[]{id.toString()}) == 1;
+            deleted = getSugarDataBase().delete(NamingHelper.toSQLName(type), "Id=?", new String[]{id.toString()}) == 1;
         } else {
             Log.i(SUGAR, "Cannot delete object: " + type.getSimpleName() + " - object has not been saved");
-            return false;
         }
+
+        if(deleted) {
+            for (SugarValidator validator : validators) {
+                validator.validatePostRemove(this);
+            }
+        }
+
+        return deleted;
     }
-    
+
     public static boolean delete(Object object) {
         Class<?> type = object.getClass();
+        boolean deleted = false;
+
+        List<SugarValidator> validators = ReflectionUtil.getValidators(type);
+
+        for (SugarValidator validator : validators) {
+            if(!validator.validatePreRemove(object))
+                return false;
+        }
+
         if (type.isAnnotationPresent(Table.class)) {
             try {
                 Field field = type.getDeclaredField("id");
                 field.setAccessible(true);
                 Long id = (Long) field.get(object);
                 if (id != null && id > 0L) {
-                    boolean deleted = getSugarDataBase().delete(NamingHelper.toSQLName(type), "Id=?", new String[]{id.toString()}) == 1;
+                    deleted = getSugarDataBase().delete(NamingHelper.toSQLName(type), "Id=?", new String[]{id.toString()}) == 1;
                     Log.i(SUGAR, type.getSimpleName() + " deleted : " + id);
-                    return deleted;
                 } else {
                     Log.i(SUGAR, "Cannot delete object: " + object.getClass().getSimpleName() + " - object has not been saved");
-                    return false;
                 }
             } catch (NoSuchFieldException e) {
                 Log.i(SUGAR, "Cannot delete object: " + object.getClass().getSimpleName() + " - annotated object has no id");
-                return false;
             } catch (IllegalAccessException e) {
                 Log.i(SUGAR, "Cannot delete object: " + object.getClass().getSimpleName() + " - can't access id");
-                return false;
             }
         } else if (SugarRecord.class.isAssignableFrom(type)) {
-            return ((SugarRecord) object).delete();
+            deleted = ((SugarRecord) object).delete();
         } else {
             Log.i(SUGAR, "Cannot delete object: " + object.getClass().getSimpleName() + " - not persisted");
-            return false;
         }
+
+        if(deleted) {
+            for (SugarValidator validator : validators) {
+                validator.validatePostRemove(object);
+            }
+        }
+
+        return deleted;
     }
 
     public long save() {
